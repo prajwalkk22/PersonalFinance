@@ -47,6 +47,7 @@
     "cmdk": "^1.1.1",
     "connect-pg-simple": "^10.0.0",
     "date-fns": "^3.6.0",
+    "dotenv": "^17.3.1",
     "drizzle-orm": "^0.39.3",
     "drizzle-zod": "^0.7.1",
     "embla-carousel-react": "^8.6.0",
@@ -57,6 +58,7 @@
     "lucide-react": "^0.453.0",
     "memoizee": "^0.4.17",
     "memorystore": "^1.6.7",
+    "mongodb": "^7.1.0",
     "next-themes": "^0.4.6",
     "openai": "^6.22.0",
     "openid-client": "^6.8.2",
@@ -106,12 +108,18 @@
     "typescript": "5.6.3",
     "vite": "^7.3.0"
   },
-  "overrides": {
-    "drizzle-kit": {
-      "@esbuild-kit/esm-loader": "npm:tsx@^4.20.4"
-    }
-  },
   "optionalDependencies": {
     "bufferutil": "^4.0.8"
-  }
+  },
+  "description": "## Project Overview This is a production-ready personal finance assistant that helps users track expenses, manage budgets, optimize taxes, and improve financial health using AI-powered insights.",
+  "main": "postcss.config.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/prajwalkk22/PersonalFinance.git"
+  },
+  "author": "",
+  "bugs": {
+    "url": "https://github.com/prajwalkk22/PersonalFinance/issues"
+  },
+  "homepage": "https://github.com/prajwalkk22/PersonalFinance#readme"
 }

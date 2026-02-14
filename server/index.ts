@@ -1,7 +1,8 @@
+import 'dotenv/config';
 import express, { type Request, Response, NextFunction } from "express";
-import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
+import { connectMongo } from "./mongo";
 
 const app = express();
 const httpServer = createServer(app);
@@ -60,6 +61,17 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+  // connect to MongoDB if `MONGODB_URI` is provided
+  try {
+    if (process.env.MONGODB_URI) {
+      await connectMongo();
+    }
+  } catch (err) {
+    console.error("Failed to connect to MongoDB:", err);
+    // continue starting the server so other dev flows still work
+  }
+
+  const { registerRoutes } = await import("./routes");
   await registerRoutes(httpServer, app);
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {

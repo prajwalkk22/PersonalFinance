@@ -8,3 +8,5 @@ vite.config.ts.*
 # Replit / local agent state
 .local/
 .replit/
+
+.env
