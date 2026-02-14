@@ -7,7 +7,6 @@ import {
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, sql, desc, gte, lte } from "drizzle-orm";
-import { authStorage } from "./replit_integrations/auth/storage";
 import { getDb } from "./mongo";
 
 const useMongo = !process.env.DATABASE_URL;
@@ -58,9 +57,14 @@ export interface IStorage {
 }
 
 export class DatabaseStorage implements IStorage {
-  // Auth delegates
   async getUser(id: string): Promise<User | undefined> {
-    return authStorage.getUser(id); // Use the integration's storage
+    if (useMongo) {
+      const mongo = getDb();
+      const docs = mongo.collection<User>("users");
+      return (await docs.findOne({ id })) || undefined;
+    }
+    const [user] = await db.select().from(users).where(eq(users.id, id));
+    return user;
   }
 
   async getUserByUsername(username: string): Promise<User | undefined> {

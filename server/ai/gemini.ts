@@ -208,5 +208,3 @@ export const gemini = {
     },
   },
 };
-
-export const openai = gemini;

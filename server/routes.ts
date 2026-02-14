@@ -3,7 +3,7 @@ import { type Server } from "http";
 import { storage } from "./storage";
 import { api } from "@shared/routes";
 import { z } from "zod";
-import { openai } from "./replit_integrations/audio";
+import { gemini } from "./ai/gemini";
 
 const CATEGORY_COLORS = [
   "#10b981",
@@ -435,7 +435,7 @@ export async function registerRoutes(
     if (!input) return;
 
     try {
-      const completion: any = await openai.chat.completions.create({
+      const completion: any = await gemini.chat.completions.create({
         model: process.env.AI_CHAT_MODEL || process.env.GEMINI_MODEL || "gemini-2.0-flash",
         messages: [
           {
@@ -492,7 +492,7 @@ export async function registerRoutes(
     });
 
     try {
-      const completion: any = await openai.chat.completions.create({
+      const completion: any = await gemini.chat.completions.create({
         model: process.env.AI_CHAT_MODEL || process.env.GEMINI_MODEL || "gemini-2.0-flash",
         messages,
       });
