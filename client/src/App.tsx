@@ -9,6 +9,7 @@ import Landing from "@/pages/Landing";
 import Transactions from "@/pages/Transactions";
 import Goals from "@/pages/Goals";
 import Tax from "@/pages/Tax";
+import Login from "@/pages/Login";
 import { useAuth } from "@/hooks/use-auth";
 import { Loader2 } from "lucide-react";
 
@@ -17,15 +18,13 @@ function PrivateRoute({ component: Component }: { component: React.ComponentType
 
   if (isLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-background">
-        <Loader2 className="w-10 h-10 animate-spin text-primary" />
+      <div className="min-h-screen flex items-center justify-center">
+        <Loader2 className="animate-spin" />
       </div>
     );
   }
 
-  if (!user) {
-    return <Redirect to="/" />;
-  }
+  if (!user) return <Redirect to="/login" />;
 
   return <Component />;
 }
@@ -33,43 +32,32 @@ function PrivateRoute({ component: Component }: { component: React.ComponentType
 function Router() {
   const { user, isLoading } = useAuth();
 
-  if (isLoading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-background">
-        <Loader2 className="w-10 h-10 animate-spin text-primary" />
-      </div>
-    );
-  }
+  if (isLoading) return <Loader2 className="animate-spin" />;
 
   return (
     <Switch>
       <Route path="/">
         {user ? <Redirect to="/dashboard" /> : <Landing />}
       </Route>
-      
+
+      <Route path="/login">
+        <Login />
+      </Route>
+
       <Route path="/dashboard">
         {() => <PrivateRoute component={Dashboard} />}
       </Route>
-      
+
       <Route path="/transactions">
         {() => <PrivateRoute component={Transactions} />}
       </Route>
-      
+
       <Route path="/goals">
         {() => <PrivateRoute component={Goals} />}
       </Route>
-      
+
       <Route path="/tax">
         {() => <PrivateRoute component={Tax} />}
-      </Route>
-
-      {/* Placeholders for routes that will be built later or reuse components */}
-      <Route path="/budgets">
-        {() => <PrivateRoute component={Dashboard} />} {/* Redirect to dashboard for MVP */}
-      </Route>
-      
-      <Route path="/advisor">
-        {() => <PrivateRoute component={Tax} />} {/* Redirect to tax for MVP */}
       </Route>
 
       <Route component={NotFound} />
@@ -77,7 +65,7 @@ function Router() {
   );
 }
 
-function App() {
+export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
@@ -87,5 +75,3 @@ function App() {
     </QueryClientProvider>
   );
 }
-
-export default App;

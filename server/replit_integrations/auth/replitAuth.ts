@@ -20,21 +20,39 @@ const getOidcConfig = memoize(
 
 export function getSession() {
   const sessionTtl = 7 * 24 * 60 * 60 * 1000; // 1 week
-  const pgStore = connectPg(session);
-  const sessionStore = new pgStore({
-    conString: process.env.DATABASE_URL,
-    createTableIfMissing: false,
-    ttl: sessionTtl,
-    tableName: "sessions",
-  });
+  const secret = process.env.SESSION_SECRET || "dev-session-secret";
+
+  // If DATABASE_URL is present, use Postgres-backed store. Otherwise fall back
+  // to the default MemoryStore for local development (not suitable for production).
+  if (process.env.DATABASE_URL) {
+    const pgStore = connectPg(session);
+    const sessionStore = new pgStore({
+      conString: process.env.DATABASE_URL,
+      createTableIfMissing: false,
+      ttl: sessionTtl,
+      tableName: "sessions",
+    });
+    return session({
+      secret,
+      store: sessionStore,
+      resave: false,
+      saveUninitialized: false,
+      cookie: {
+        httpOnly: true,
+        secure: true,
+        maxAge: sessionTtl,
+      },
+    });
+  }
+
+  console.warn("DATABASE_URL not set — using in-memory session store. Do not use this in production.");
   return session({
-    secret: process.env.SESSION_SECRET!,
-    store: sessionStore,
+    secret,
     resave: false,
     saveUninitialized: false,
     cookie: {
       httpOnly: true,
-      secure: true,
+      secure: false,
       maxAge: sessionTtl,
     },
   });
@@ -65,6 +83,13 @@ export async function setupAuth(app: Express) {
   app.use(getSession());
   app.use(passport.initialize());
   app.use(passport.session());
+
+  // If REPL_ID (client id) is not set, skip OIDC setup so the server can run
+  // in local development without Replit auth configured.
+  if (!process.env.REPL_ID) {
+    console.warn("REPL_ID not set — Replit OIDC auth disabled. Login routes will not be available.");
+    return;
+  }
 
   const config = await getOidcConfig();
 

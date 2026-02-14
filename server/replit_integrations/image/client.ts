@@ -1,11 +1,9 @@
 import fs from "node:fs";
-import OpenAI, { toFile } from "openai";
+import { openai as geminiOpenAI } from "../../ai/gemini";
 import { Buffer } from "node:buffer";
 
-export const openai = new OpenAI({
-  apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
-  baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
-});
+import { toFile } from "openai";
+export const openai = geminiOpenAI;
 
 /**
  * Generate an image and return as Buffer.

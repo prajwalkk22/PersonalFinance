@@ -1,4 +1,5 @@
-import OpenAI, { toFile } from "openai";
+import { openai as geminiOpenAI } from "../../ai/gemini";
+import { toFile } from "openai";
 import { Buffer } from "node:buffer";
 import { spawn } from "child_process";
 import { writeFile, unlink, readFile } from "fs/promises";
@@ -6,10 +7,8 @@ import { randomUUID } from "crypto";
 import { tmpdir } from "os";
 import { join } from "path";
 
-export const openai = new OpenAI({
-  apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
-  baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
-});
+// Adapter: expose `openai` variable for compatibility with the rest of the code.
+export const openai = geminiOpenAI;
 
 export type AudioFormat = "wav" | "mp3" | "webm" | "mp4" | "ogg" | "unknown";
 
@@ -253,6 +252,7 @@ export async function speechToText(
  * Streaming Speech-to-Text: Transcribes audio with real-time streaming.
  * Uses gpt-4o-mini-transcribe for accurate transcription.
  */
+
 export async function speechToTextStream(
   audioBuffer: Buffer,
   format: "wav" | "mp3" | "webm" = "wav"

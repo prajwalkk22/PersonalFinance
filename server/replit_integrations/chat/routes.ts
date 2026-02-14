@@ -1,11 +1,9 @@
 import type { Express, Request, Response } from "express";
-import OpenAI from "openai";
 import { chatStorage } from "./storage";
+import { openai as geminiOpenAI } from "../../ai/gemini";
 
-const openai = new OpenAI({
-  apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
-  baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
-});
+// keep `openai` variable name for compatibility with existing code
+const openai = geminiOpenAI;
 
 export function registerChatRoutes(app: Express): void {
   // Get all conversations
