@@ -1,88 +1,185 @@
-/*
-  Minimal Gemini adapter shim
-  - Reads `GEMINI_API_KEY` and `GEMINI_API_URL` from env
-  - Exposes `chat.completions.create({ model, messages, stream, ... })`
-  - Exposes `images.generate({ prompt, ... })`
-  - Exposes `audio.transcriptions.create(...)` (throws if unsupported)
-
-  NOTE: This is a best-effort shim to minimize application changes.
-  The Gemini API differs from OpenAI's; this wrapper maps common inputs
-  to Gemini REST endpoints and returns objects shaped similarly to the
-  `openai` client so the rest of the app can continue to call `openai.*`.
-*/
-
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const GEMINI_API_URL = process.env.GEMINI_API_URL || "https://generativelanguage.googleapis.com";
+const GEMINI_API_URL =
+  (process.env.GEMINI_API_URL || "https://generativelanguage.googleapis.com").replace(/\/$/, "");
+const GEMINI_API_VERSION = process.env.GEMINI_API_VERSION || "v1beta";
+const DEFAULT_GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-1.5-flash";
 
 if (!GEMINI_API_KEY) {
   console.warn("GEMINI_API_KEY not set — Gemini adapter will be inactive.");
 }
 
+function withApiKey(path: string): string {
+  const separator = path.includes("?") ? "&" : "?";
+  return `${GEMINI_API_URL}${path}${separator}key=${GEMINI_API_KEY}`;
+}
+
+class GeminiHttpError extends Error {
+  status: number;
+  body: string;
+
+  constructor(status: number, statusText: string, body: string) {
+    super(`Gemini API ${status} ${statusText}: ${body}`);
+    this.name = "GeminiHttpError";
+    this.status = status;
+    this.body = body;
+  }
+}
+
 async function apiPost(path: string, body: any) {
-  const url = `${GEMINI_API_URL.replace(/\/$/, "")}${path}`;
-  const res = await fetch(url, {
+  if (!GEMINI_API_KEY) {
+    throw new Error("GEMINI_API_KEY is not set");
+  }
+
+  const res = await fetch(withApiKey(path), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${GEMINI_API_KEY}`,
     },
     body: JSON.stringify(body),
   });
 
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`Gemini API ${res.status} ${res.statusText}: ${text}`);
+    throw new GeminiHttpError(res.status, res.statusText, text);
   }
 
   return res.json();
 }
 
-// Helper to convert messages array to Gemini `input` text
-function messagesToPrompt(messages: any[]) {
-  // Simple concatenation: system / user / assistant roles.
-  return messages.map((m) => `${m.role}: ${m.content}`).join("\n");
+function toText(content: any): string {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => {
+        if (typeof part === "string") return part;
+        if (part && typeof part.text === "string") return part.text;
+        return "";
+      })
+      .join(" ")
+      .trim();
+  }
+  return "";
+}
+
+function toGeminiContents(messages: any[]) {
+  const systemInstructions = messages
+    .filter((m) => m?.role === "system")
+    .map((m) => toText(m.content))
+    .filter(Boolean)
+    .join("\n");
+
+  const chatContents = messages
+    .filter((m) => m?.role !== "system")
+    .map((m) => {
+      const text = toText(m.content);
+      if (!text) return null;
+      return {
+        role: m.role === "assistant" ? "model" : "user",
+        parts: [{ text }],
+      };
+    })
+    .filter(Boolean);
+
+  if (systemInstructions) {
+    chatContents.unshift({
+      role: "user",
+      parts: [{ text: `System instructions:\n${systemInstructions}` }],
+    });
+  }
+
+  if (chatContents.length === 0) {
+    chatContents.push({
+      role: "user",
+      parts: [{ text: "" }],
+    });
+  }
+
+  return chatContents;
+}
+
+function extractGeneratedText(json: any): string {
+  const candidates = json?.candidates;
+  if (!Array.isArray(candidates)) return "";
+
+  const text = candidates
+    .map((candidate: any) =>
+      (candidate?.content?.parts || [])
+        .map((part: any) => (typeof part?.text === "string" ? part.text : ""))
+        .join("")
+    )
+    .join("\n")
+    .trim();
+
+  return text;
+}
+
+function uniqueModels(models: string[]) {
+  return [...new Set(models.map((m) => m.trim()).filter(Boolean))];
+}
+
+function candidateModels(requestedModel?: string) {
+  return uniqueModels([
+    requestedModel || "",
+    process.env.GEMINI_MODEL || "",
+    process.env.GEMINI_FALLBACK_MODEL || "",
+    "gemini-2.0-flash",
+    "gemini-2.0-flash-lite",
+    "gemini-1.5-flash",
+    "gemini-1.5-pro",
+  ]);
+}
+
+async function tryGenerateWithModel(model: string, body: any) {
+  return apiPost(`/${GEMINI_API_VERSION}/models/${model}:generateContent`, body);
+}
+
+async function generateWithFallback(opts: { model?: string; body: any }) {
+  const models = candidateModels(opts.model || DEFAULT_GEMINI_MODEL);
+  let lastError: unknown = null;
+
+  for (const model of models) {
+    try {
+      const json = await tryGenerateWithModel(model, opts.body);
+      return { json, model };
+    } catch (error: any) {
+      lastError = error;
+      if (!(error instanceof GeminiHttpError) || error.status !== 404) {
+        throw error;
+      }
+    }
+  }
+
+  throw lastError || new Error("No compatible Gemini model found");
 }
 
 export const gemini = {
   chat: {
     completions: {
       async create(opts: any) {
-        // opts: { model, messages, stream, max_completion_tokens }
-        if (!GEMINI_API_KEY) {
-          throw new Error("GEMINI_API_KEY is not set");
-        }
-
-        const model = opts.model || "chat-bison";
-        const prompt = messagesToPrompt(opts.messages || []);
-
-        // Use a reasonable Gemini-style endpoint. This maps to a generate call.
-        const path = `/v1/models/${model}:generate`;
-        const body = {
-          input: prompt,
-          // map token limits if provided
-          max_output_tokens: opts.max_completion_tokens || 1024,
+        const requestedModel = opts?.model || DEFAULT_GEMINI_MODEL;
+        const generationConfig: Record<string, any> = {
+          maxOutputTokens: opts?.max_completion_tokens || 1024,
         };
 
-        // Gemini doesn't support the same streaming protocol here; if stream: true,
-        // emulate streaming by returning an async iterable that yields one chunk.
-        if (opts.stream) {
-          const json = await apiPost(path, body);
-          // Attempt to extract text content from Gemini's response
-          const candidates = json?.candidates || [];
-          const text = candidates.map((c: any) => c?.content?.[0]?.text || "").join("\n") || json?.output?.[0]?.content?.[0]?.text || "";
-
-          // Return an AsyncIterable compatible with current code's `for await (const chunk of stream)`
-          async function* gen() {
-            yield { choices: [{ delta: { content: text } }] };
-          }
-          return gen();
+        if (opts?.response_format?.type === "json_object") {
+          generationConfig.responseMimeType = "application/json";
         }
 
-        const json = await apiPost(path, body);
-        const candidates = json?.candidates || [];
-        const text = candidates.map((c: any) => c?.content?.[0]?.text || "").join("\n") || json?.output?.[0]?.content?.[0]?.text || "";
+        const body = {
+          contents: toGeminiContents(opts?.messages || []),
+          generationConfig,
+        };
 
-        // Shape response like OpenAI client
+        const { json } = await generateWithFallback({ model: requestedModel, body });
+        const text = extractGeneratedText(json);
+
+        if (opts?.stream) {
+          const stream = async function* () {
+            yield { choices: [{ delta: { content: text } }] };
+          };
+          return stream();
+        }
+
         return { choices: [{ message: { content: text } }] };
       },
     },
@@ -90,34 +187,26 @@ export const gemini = {
 
   images: {
     async generate(opts: any) {
-      if (!GEMINI_API_KEY) throw new Error("GEMINI_API_KEY is not set");
-      // Gemini image endpoints vary; attempt a reasonable mapping
-      const path = `/v1/images:generate`;
-      const body = {
-        prompt: opts.prompt || opts.prompt_text || "",
-        // map size / count
-        // Gemini image API may expect different params; user should update if necessary
-        size: opts.size || "1024x1024",
-      };
+      const model = process.env.GEMINI_IMAGE_MODEL || DEFAULT_GEMINI_MODEL;
+      const prompt = opts?.prompt || opts?.prompt_text || "";
+      const json = await apiPost(`/${GEMINI_API_VERSION}/models/${model}:generateContent`, {
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
+      });
 
-      const json = await apiPost(path, body);
-      // Map to OpenAI-like response { data: [{ b64_json: "..." }] }
-      // The exact field names differ; support common patterns
-      const b64 = json?.data?.[0]?.b64_json || json?.image || json?.images?.[0]?.b64 || null;
-      return { data: [{ b64_json: b64 }] };
+      const text = extractGeneratedText(json);
+      return { data: [{ b64_json: null, text }] };
     },
   },
 
   audio: {
     transcriptions: {
-      async create(file: any, opts: any) {
-        // Not implemented: Gemini's speech-to-text APIs are different.
-        throw new Error("Gemini audio transcription wrapper is not implemented. Please implement or use an external transcription service.");
+      async create() {
+        throw new Error(
+          "Gemini audio transcription wrapper is not implemented. Use a supported transcription provider."
+        );
       },
     },
   },
 };
 
-// For compatibility, export `openai` identifier as well so existing imports like
-// `import { openai } from './client'` will keep working if we re-export gemini.
 export const openai = gemini;

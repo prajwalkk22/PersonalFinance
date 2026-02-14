@@ -18,10 +18,9 @@ import { useCreateTransaction, useCategorizeTransaction } from "@/hooks/use-tran
 import { Loader2, Sparkles } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useEffect } from "react";
-import { useDebounce } from "@/hooks/use-mobile"; // Reusing existing hook or creating new one
 
 // Schema with string coercion for numbers/dates
-const formSchema = insertTransactionSchema.extend({
+const formSchema = insertTransactionSchema.omit({ userId: true }).extend({
   amount: z.coerce.number().min(0.01, "Amount must be greater than 0"),
   date: z.coerce.date(),
 });
@@ -53,9 +52,10 @@ export function TransactionForm({ onSuccess }: { onSuccess: () => void }) {
   // Auto-categorize when description changes
   useEffect(() => {
     const timer = setTimeout(() => {
-      if (description.length > 3) {
+      const text = description ?? "";
+      if (text.length > 3) {
         categorizeMutation.mutate(
-          { description, amount },
+          { description: text, amount: Number(amount ?? 0) },
           {
             onSuccess: (data) => {
               form.setValue("category", data.category);
@@ -74,7 +74,7 @@ export function TransactionForm({ onSuccess }: { onSuccess: () => void }) {
     }, 1000); // 1s debounce
 
     return () => clearTimeout(timer);
-  }, [description, amount]);
+  }, [description, amount, categorizeMutation, form, toast]);
 
   function onSubmit(values: FormValues) {
     createMutation.mutate(values, {
@@ -203,7 +203,7 @@ export function TransactionForm({ onSuccess }: { onSuccess: () => void }) {
             <FormItem className="flex flex-row items-start space-x-3 space-y-0 rounded-md border p-4">
               <FormControl>
                 <Checkbox
-                  checked={field.value}
+                  checked={!!field.value}
                   onCheckedChange={field.onChange}
                 />
               </FormControl>

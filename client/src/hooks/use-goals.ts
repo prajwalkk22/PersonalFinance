@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { api, buildUrl, type InsertGoal } from "@shared/routes";
+import { api, buildUrl } from "@shared/routes";
 
 export function useGoals() {
   return useQuery({
@@ -15,7 +15,7 @@ export function useGoals() {
 export function useCreateGoal() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (data: InsertGoal) => {
+    mutationFn: async (data: any) => {
       const res = await fetch(api.goals.create.path, {
         method: api.goals.create.method,
         headers: { "Content-Type": "application/json" },
@@ -34,7 +34,7 @@ export function useCreateGoal() {
 export function useUpdateGoal() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async ({ id, ...data }: { id: number } & Partial<InsertGoal> & { addToCurrentAmount?: number }) => {
+    mutationFn: async ({ id, ...data }: { id: number; addToCurrentAmount?: number; [key: string]: any }) => {
       const url = buildUrl(api.goals.update.path, { id });
       const res = await fetch(url, {
         method: api.goals.update.method,

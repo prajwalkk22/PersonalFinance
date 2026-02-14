@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { insertTransactionSchema, insertBudgetSchema, insertGoalSchema, transactions, budgets, goals, financialSnapshots } from './schema';
+export type { InsertTransaction, InsertBudget, InsertGoal } from "./schema";
 
 export const errorSchemas = {
   validation: z.object({
@@ -31,7 +32,7 @@ export const api = {
     create: {
       method: 'POST' as const,
       path: '/api/transactions' as const,
-      input: insertTransactionSchema,
+      input: insertTransactionSchema.omit({ userId: true }),
       responses: {
         201: z.custom<typeof transactions.$inferSelect>(),
         400: errorSchemas.validation,
@@ -48,7 +49,7 @@ export const api = {
     update: {
       method: 'PUT' as const,
       path: '/api/transactions/:id' as const,
-      input: insertTransactionSchema.partial(),
+      input: insertTransactionSchema.omit({ userId: true }).partial(),
       responses: {
         200: z.custom<typeof transactions.$inferSelect>(),
         400: errorSchemas.validation,
@@ -75,7 +76,7 @@ export const api = {
     create: {
       method: 'POST' as const,
       path: '/api/budgets' as const,
-      input: insertBudgetSchema,
+      input: insertBudgetSchema.omit({ userId: true }),
       responses: {
         201: z.custom<typeof budgets.$inferSelect>(),
         400: errorSchemas.validation,
@@ -84,7 +85,7 @@ export const api = {
     update: {
       method: 'PUT' as const,
       path: '/api/budgets/:id' as const,
-      input: insertBudgetSchema.partial(),
+      input: insertBudgetSchema.omit({ userId: true }).partial(),
       responses: {
         200: z.custom<typeof budgets.$inferSelect>(),
         400: errorSchemas.validation,
@@ -111,7 +112,7 @@ export const api = {
     create: {
       method: 'POST' as const,
       path: '/api/goals' as const,
-      input: insertGoalSchema,
+      input: insertGoalSchema.omit({ userId: true }),
       responses: {
         201: z.custom<typeof goals.$inferSelect>(),
         400: errorSchemas.validation,
@@ -120,7 +121,7 @@ export const api = {
     update: {
       method: 'PUT' as const,
       path: '/api/goals/:id' as const,
-      input: insertGoalSchema.partial().extend({
+      input: insertGoalSchema.omit({ userId: true }).partial().extend({
         addToCurrentAmount: z.number().optional(), // Special field to add savings
       }),
       responses: {
@@ -172,7 +173,7 @@ export const api = {
       path: '/api/ai/categorize' as const,
       input: z.object({
         description: z.string(),
-        amount: z.number().optional(),
+        amount: z.coerce.number().optional(),
       }),
       responses: {
         200: z.object({

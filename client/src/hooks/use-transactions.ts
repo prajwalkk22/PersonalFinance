@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { api, buildUrl, type InsertTransaction } from "@shared/routes";
+import { api, buildUrl } from "@shared/routes";
 
 export function useTransactions(filters?: { month?: string; year?: string; category?: string }) {
   const queryString = filters ? `?${new URLSearchParams(filters as any).toString()}` : '';
@@ -17,7 +17,7 @@ export function useTransactions(filters?: { month?: string; year?: string; categ
 export function useCreateTransaction() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (data: InsertTransaction) => {
+    mutationFn: async (data: any) => {
       const res = await fetch(api.transactions.create.path, {
         method: api.transactions.create.method,
         headers: { "Content-Type": "application/json" },

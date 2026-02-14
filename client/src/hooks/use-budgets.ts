@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { api, buildUrl, type InsertBudget } from "@shared/routes";
+import { api, buildUrl } from "@shared/routes";
 
 export function useBudgets() {
   return useQuery({
@@ -15,7 +15,7 @@ export function useBudgets() {
 export function useCreateBudget() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (data: InsertBudget) => {
+    mutationFn: async (data: any) => {
       const res = await fetch(api.budgets.create.path, {
         method: api.budgets.create.method,
         headers: { "Content-Type": "application/json" },
@@ -41,6 +41,26 @@ export function useDeleteBudget() {
         credentials: "include" 
       });
       if (!res.ok) throw new Error("Failed to delete budget");
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [api.budgets.list.path] });
+    },
+  });
+}
+
+export function useUpdateBudget() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, ...data }: { id: number; [key: string]: any }) => {
+      const url = buildUrl(api.budgets.update.path, { id });
+      const res = await fetch(url, {
+        method: api.budgets.update.method,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error("Failed to update budget");
+      return api.budgets.update.responses[200].parse(await res.json());
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [api.budgets.list.path] });

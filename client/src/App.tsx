@@ -10,6 +10,8 @@ import Transactions from "@/pages/Transactions";
 import Goals from "@/pages/Goals";
 import Tax from "@/pages/Tax";
 import Login from "@/pages/Login";
+import Budgets from "@/pages/Budgets";
+import Advisor from "@/pages/Advisor";
 import { useAuth } from "@/hooks/use-auth";
 import { Loader2 } from "lucide-react";
 
@@ -56,8 +58,16 @@ function Router() {
         {() => <PrivateRoute component={Goals} />}
       </Route>
 
+      <Route path="/budgets">
+        {() => <PrivateRoute component={Budgets} />}
+      </Route>
+
       <Route path="/tax">
         {() => <PrivateRoute component={Tax} />}
+      </Route>
+
+      <Route path="/advisor">
+        {() => <PrivateRoute component={Advisor} />}
       </Route>
 
       <Route component={NotFound} />

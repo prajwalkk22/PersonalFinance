@@ -15,7 +15,7 @@ import { useState } from "react";
 import { useToast } from "@/hooks/use-toast";
 
 // Create Goal Form Component
-const createGoalSchema = insertGoalSchema.extend({
+const createGoalSchema = insertGoalSchema.omit({ userId: true }).extend({
   targetAmount: z.coerce.number().min(1),
   deadline: z.coerce.date().optional(),
 });
