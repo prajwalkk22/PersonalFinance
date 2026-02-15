@@ -1,21 +1,40 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, buildUrl } from "@shared/routes";
+import { QUERY_KEYS } from "@/lib/queryKeys";
 
-export function useTransactions(filters?: { month?: string; year?: string; category?: string }) {
-  const queryString = filters ? `?${new URLSearchParams(filters as any).toString()}` : '';
-  
+/* ================= LIST ================= */
+
+export function useTransactions(filters?: {
+  month?: string;
+  year?: string;
+  category?: string;
+}) {
+  const queryString = filters
+    ? `?${new URLSearchParams(filters as any).toString()}`
+    : "";
+
   return useQuery({
-    queryKey: [api.transactions.list.path, filters],
+    queryKey: [...QUERY_KEYS.TRANSACTIONS, filters],
     queryFn: async () => {
-      const res = await fetch(api.transactions.list.path + queryString, { credentials: "include" });
+      const res = await fetch(
+        api.transactions.list.path + queryString,
+        { credentials: "include" }
+      );
+
       if (!res.ok) throw new Error("Failed to fetch transactions");
-      return api.transactions.list.responses[200].parse(await res.json());
+
+      return api.transactions.list.responses[200].parse(
+        await res.json()
+      );
     },
   });
 }
 
+/* ================= CREATE ================= */
+
 export function useCreateTransaction() {
   const queryClient = useQueryClient();
+
   return useMutation({
     mutationFn: async (data: any) => {
       const res = await fetch(api.transactions.create.path, {
@@ -24,33 +43,48 @@ export function useCreateTransaction() {
         body: JSON.stringify(data),
         credentials: "include",
       });
+
       if (!res.ok) throw new Error("Failed to create transaction");
-      return api.transactions.create.responses[201].parse(await res.json());
+
+      return api.transactions.create.responses[201].parse(
+        await res.json()
+      );
     },
+
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: [api.transactions.list.path] });
-      queryClient.invalidateQueries({ queryKey: [api.analytics.dashboard.path] });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.TRANSACTIONS });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.DASHBOARD });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.TAX });
     },
   });
 }
 
+/* ================= DELETE ================= */
+
 export function useDeleteTransaction() {
   const queryClient = useQueryClient();
+
   return useMutation({
     mutationFn: async (id: number) => {
       const url = buildUrl(api.transactions.delete.path, { id });
-      const res = await fetch(url, { 
+
+      const res = await fetch(url, {
         method: api.transactions.delete.method,
-        credentials: "include" 
+        credentials: "include",
       });
+
       if (!res.ok) throw new Error("Failed to delete transaction");
     },
+
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: [api.transactions.list.path] });
-      queryClient.invalidateQueries({ queryKey: [api.analytics.dashboard.path] });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.TRANSACTIONS });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.DASHBOARD });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.TAX });
     },
   });
 }
+
+/* ================= AI CATEGORIZE ================= */
 
 export function useCategorizeTransaction() {
   return useMutation({
@@ -61,8 +95,12 @@ export function useCategorizeTransaction() {
         body: JSON.stringify(data),
         credentials: "include",
       });
+
       if (!res.ok) throw new Error("Failed to categorize transaction");
-      return api.ai.categorize.responses[200].parse(await res.json());
+
+      return api.ai.categorize.responses[200].parse(
+        await res.json()
+      );
     },
   });
 }
