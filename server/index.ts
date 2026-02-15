@@ -4,6 +4,14 @@ import session from "express-session";
 import { serveStatic } from "./static";
 import { createServer } from "http";
 import { connectMongo } from "./mongo";
+import { gemini } from "./ai/gemini";
+
+// (async () => {
+//   const res = await gemini.chat.completions.create({
+//     messages: [{ role: "user", content: "Say hello in one sentence" }],
+//   });
+//   console.log("Gemini test:", res.choices[0].message.content);
+// })();
 
 const app = express();
 const httpServer = createServer(app);

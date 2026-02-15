@@ -1,24 +1,44 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@shared/routes";
 
+/* ================= DASHBOARD ANALYTICS ================= */
+
 export function useDashboardAnalytics() {
   return useQuery({
-    queryKey: [api.analytics.dashboard.path],
+    queryKey: ["analytics", "dashboard"],
     queryFn: async () => {
-      const res = await fetch(api.analytics.dashboard.path, { credentials: "include" });
-      if (!res.ok) throw new Error("Failed to fetch dashboard data");
-      return api.analytics.dashboard.responses[200].parse(await res.json());
+      const res = await fetch(api.analytics.dashboard.path, {
+        method: api.analytics.dashboard.method,
+        credentials: "include",
+      });
+
+      if (!res.ok) {
+        throw new Error("Failed to fetch dashboard analytics");
+      }
+
+      const json = await res.json();
+      return api.analytics.dashboard.responses[200].parse(json);
     },
   });
 }
 
+/* ================= TAX ANALYTICS ================= */
+
 export function useTaxAnalytics() {
   return useQuery({
-    queryKey: [api.analytics.tax.path],
+    queryKey: ["analytics", "tax"],
     queryFn: async () => {
-      const res = await fetch(api.analytics.tax.path, { credentials: "include" });
-      if (!res.ok) throw new Error("Failed to fetch tax data");
-      return api.analytics.tax.responses[200].parse(await res.json());
+      const res = await fetch(api.analytics.tax.path, {
+        method: api.analytics.tax.method,
+        credentials: "include",
+      });
+
+      if (!res.ok) {
+        throw new Error("Failed to fetch tax analytics");
+      }
+
+      const json = await res.json();
+      return api.analytics.tax.responses[200].parse(json);
     },
   });
 }

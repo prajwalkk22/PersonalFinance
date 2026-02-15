@@ -2,508 +2,611 @@ import type { Express } from "express";
 import { type Server } from "http";
 import { storage } from "./storage";
 import { api } from "@shared/routes";
-import { z } from "zod";
 import { gemini } from "./ai/gemini";
+import { z } from "zod";
+
+/* ================= UTILS ================= */
+/* ================= AI CACHE ================= */
+
+const categorizeCache = new Map<
+  string,
+  {
+    category: string;
+    confidence: number;
+    isTaxDeductible: boolean;
+    taxCategory?: string;
+  }
+>();
+
 
 const CATEGORY_COLORS = [
-  "#10b981",
-  "#3b82f6",
-  "#f59e0b",
-  "#ef4444",
-  "#8b5cf6",
-  "#06b6d4",
-  "#84cc16",
-  "#f97316",
+  "#10b981", "#3b82f6", "#f59e0b", "#ef4444",
+  "#8b5cf6", "#06b6d4", "#84cc16", "#f97316",
 ];
 
-function toNumber(value: unknown): number {
-  if (typeof value === "number") return value;
-  if (typeof value === "string") return Number(value) || 0;
-  return 0;
-}
+const toNumber = (v: any) => (typeof v === "number" ? v : Number(v) || 0);
+const formatAmount = (v: any) => toNumber(v).toFixed(2);
+const parseId = (raw: unknown): number | null => {
+  const value = Number(raw);
+  return Number.isInteger(value) && value > 0 ? value : null;
+};
 
-function formatAmount(value: unknown): string {
-  return toNumber(value).toFixed(2);
-}
+const badRequest = (res: any, message: string) => res.status(400).json({ message });
 
-function parseJsonContent(raw: unknown): Record<string, any> {
-  if (typeof raw !== "string") return {};
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return {};
-  }
-}
-
-function extractAssistantText(completion: any): string {
-  const content = completion?.choices?.[0]?.message?.content;
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    return content
-      .map((part: any) => (typeof part?.text === "string" ? part.text : ""))
-      .join(" ")
-      .trim();
-  }
-  return "";
-}
+/* ================= ROUTES ================= */
 
 export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
-  const getDemoUser = () => ({
-    id: process.env.DEMO_USER_ID || "demo-user",
-    email: process.env.DEMO_USER_EMAIL || "demo@hackathon.dev",
-    firstName: process.env.DEMO_USER_FIRST_NAME || "Demo",
-    lastName: process.env.DEMO_USER_LAST_NAME || "User",
-    profileImageUrl: null,
-  });
 
-  const isAuthed = (req: any) =>
-    typeof req.isAuthenticated === "function" && req.isAuthenticated();
+  /* ================= AUTH ================= */
+
+  const demoUser = {
+    id: "demo-user",
+    email: "demo@hackathon.dev",
+    firstName: "Demo",
+    lastName: "User",
+    profileImageUrl: null,
+  };
 
   const requireAuth = (req: any, res: any) => {
-    if (!isAuthed(req)) {
+    if (!req.session?.user) {
       res.sendStatus(401);
       return false;
     }
+    req.user = req.session.user;
     return true;
   };
 
-  const parseBody = <T,>(schema: z.ZodType<T>, body: unknown, res: any): T | null => {
-    const parsed = schema.safeParse(body);
-    if (!parsed.success) {
-      res.status(400).json({ message: parsed.error.issues[0]?.message || "Invalid request body" });
-      return null;
-    }
-    return parsed.data;
-  };
+  app.post("/api/login", (req, res) => {
+    req.session.user = demoUser;
+    res.json(demoUser);
+  });
+  app.get("/api/login", (req, res) => {
+    req.session.user = demoUser;
+    res.json(demoUser);
+  });
 
-  const parseId = (rawId: string, res: any): number | null => {
-    const id = Number(rawId);
-    if (!Number.isInteger(id) || id <= 0) {
-      res.status(400).json({ message: "Invalid id" });
-      return null;
-    }
-    return id;
-  };
-
-  const login = (req: any, res: any) => {
-    req.session.user = getDemoUser();
-    req.user = req.session.user;
-
-    req.session.save((err: unknown) => {
-      if (err) {
-        return res.status(500).json({ message: "Failed to create session" });
-      }
-      return res.json(req.session.user);
-    });
-  };
-
-  const logout = (req: any, res: any) => {
-    req.session.destroy((err: unknown) => {
-      if (err) {
-        return res.status(500).json({ message: "Failed to destroy session" });
-      }
+  app.post("/api/logout", (req, res) => {
+    req.session.destroy(() => {
       res.clearCookie("pf.sid");
-      return res.json({ success: true });
+      res.json({ success: true });
     });
-  };
+  });
+  app.get("/api/logout", (req, res) => {
+    req.session.destroy(() => {
+      res.clearCookie("pf.sid");
+      res.json({ success: true });
+    });
+  });
 
-  app.post("/api/login", login);
-  app.get("/api/login", login);
-  app.post("/api/logout", logout);
-  app.get("/api/logout", logout);
-
-  app.get("/api/auth/user", (req: any, res) => {
+  app.get("/api/auth/user", (req, res) => {
     if (!requireAuth(req, res)) return;
     res.json(req.user);
   });
 
-  // === TRANSACTIONS ===
+  /* ================= TRANSACTIONS ================= */
+
   app.get(api.transactions.list.path, async (req: any, res) => {
     if (!requireAuth(req, res)) return;
-    const userId = req.user.id;
-    const filters = {
-      month: typeof req.query.month === "string" ? req.query.month : undefined,
-      year: typeof req.query.year === "string" ? req.query.year : undefined,
-      category: typeof req.query.category === "string" ? req.query.category : undefined,
-    };
-    const transactions = await storage.getTransactions(userId, filters);
-    res.json(transactions);
+    res.json(await storage.getTransactions(req.user.id, req.query));
   });
 
   app.post(api.transactions.create.path, async (req: any, res) => {
     if (!requireAuth(req, res)) return;
-    const userId = req.user.id;
-    const schema = api.transactions.create.input.extend({
-      amount: z.coerce.number(),
-      date: z.coerce.date(),
-    });
-    const input = parseBody(schema, req.body, res);
-    if (!input) return;
 
-    const transaction = await storage.createTransaction({
-      ...input,
-      userId,
-      amount: formatAmount(input.amount),
-      date: input.date,
-    } as any);
+    try {
+      const schema = api.transactions.create.input.extend({
+        amount: z.coerce.number(),
+        date: z.coerce.date(),
+      });
+      const input = schema.parse(req.body);
 
-    res.status(201).json(transaction);
+      const tx = await storage.createTransaction({
+        ...input,
+        userId: req.user.id,
+        amount: formatAmount(input.amount),
+        date: input.date,
+      } as any);
+
+      res.status(201).json(tx);
+    } catch (error: any) {
+      console.error("Transaction creation error:", error);
+      res.status(400).json({
+        message: error.message || "Validation failed",
+        errors: error.errors || []
+      });
+    }
   });
 
   app.get(api.transactions.get.path, async (req: any, res) => {
     if (!requireAuth(req, res)) return;
-    const id = parseId(req.params.id, res);
-    if (id === null) return;
-
-    const transaction = await storage.getTransaction(id);
-    if (!transaction || transaction.userId !== req.user.id) {
-      return res.status(404).json({ message: "Not found" });
-    }
-
-    return res.json(transaction);
+    const id = parseId(req.params.id);
+    if (!id) return badRequest(res, "Invalid transaction id");
+    const tx = await storage.getTransaction(id);
+    if (!tx || tx.userId !== req.user.id) return res.status(404).json({ message: "Transaction not found" });
+    res.json(tx);
   });
 
   app.put(api.transactions.update.path, async (req: any, res) => {
     if (!requireAuth(req, res)) return;
-    const id = parseId(req.params.id, res);
-    if (id === null) return;
+    const id = parseId(req.params.id);
+    if (!id) return badRequest(res, "Invalid transaction id");
 
     const existing = await storage.getTransaction(id);
     if (!existing || existing.userId !== req.user.id) {
-      return res.status(404).json({ message: "Not found" });
+      return res.status(404).json({ message: "Transaction not found" });
     }
 
-    const schema = api.transactions.update.input.extend({
-      amount: z.coerce.number().optional(),
-      date: z.coerce.date().optional(),
-    });
-    const input = parseBody(schema, req.body, res);
-    if (!input) return;
+    try {
+      const schema = api.transactions.update.input.extend({
+        amount: z.coerce.number().optional(),
+        date: z.coerce.date().optional(),
+      });
+      const input = schema.parse(req.body);
 
-    const updates: Record<string, any> = { ...input };
-    delete updates.userId;
+      const updates: Record<string, any> = { ...input };
+      delete updates.userId;
+      if (updates.amount !== undefined) updates.amount = formatAmount(updates.amount);
+      if (updates.date !== undefined) updates.date = new Date(updates.date);
 
-    if (updates.amount !== undefined) updates.amount = formatAmount(updates.amount);
-    if (updates.date !== undefined) updates.date = new Date(updates.date);
-
-    const updated = await storage.updateTransaction(id, updates as any);
-    return res.json(updated);
+      const tx = await storage.updateTransaction(id, updates as any);
+      res.json(tx);
+    } catch (error: any) {
+      res.status(400).json({
+        message: error.message || "Validation failed",
+        errors: error.errors || []
+      });
+    }
   });
 
   app.delete(api.transactions.delete.path, async (req: any, res) => {
     if (!requireAuth(req, res)) return;
-    const id = parseId(req.params.id, res);
-    if (id === null) return;
-
+    const id = parseId(req.params.id);
+    if (!id) return badRequest(res, "Invalid transaction id");
     const existing = await storage.getTransaction(id);
-    if (!existing || existing.userId !== req.user.id) {
-      return res.status(404).json({ message: "Not found" });
-    }
-
+    if (!existing || existing.userId !== req.user.id) return res.status(404).json({ message: "Transaction not found" });
     await storage.deleteTransaction(id);
-    return res.status(204).end();
+    res.sendStatus(204);
   });
 
-  // === BUDGETS ===
-  app.get(api.budgets.list.path, async (req: any, res) => {
+  /* ================= BUDGETS ================= */
+
+  app.get(api.budgets.list.path, async (req, res) => {
     if (!requireAuth(req, res)) return;
-    const budgets = await storage.getBudgets(req.user.id);
-    res.json(budgets);
+    res.json(await storage.getBudgets(req.user.id));
   });
 
   app.post(api.budgets.create.path, async (req: any, res) => {
     if (!requireAuth(req, res)) return;
-    const schema = api.budgets.create.input.extend({
-      amountLimit: z.coerce.number(),
-    });
-    const input = parseBody(schema, req.body, res);
-    if (!input) return;
 
-    const created = await storage.createBudget({
-      ...input,
-      userId: req.user.id,
-      amountLimit: formatAmount(input.amountLimit),
-    } as any);
+    try {
+      const schema = api.budgets.create.input.extend({
+        amountLimit: z.coerce.number(),
+      });
+      const input = schema.parse(req.body);
 
-    return res.status(201).json(created);
+      const budget = await storage.createBudget({
+        ...input,
+        userId: req.user.id,
+        amountLimit: formatAmount(input.amountLimit),
+      } as any);
+
+      res.status(201).json(budget);
+    } catch (error: any) {
+      res.status(400).json({
+        message: error.message || "Validation failed",
+        errors: error.errors || []
+      });
+    }
   });
 
   app.put(api.budgets.update.path, async (req: any, res) => {
     if (!requireAuth(req, res)) return;
-    const id = parseId(req.params.id, res);
-    if (id === null) return;
-
+    const id = parseId(req.params.id);
+    if (!id) return badRequest(res, "Invalid budget id");
     const owned = (await storage.getBudgets(req.user.id)).find((budget) => budget.id === id);
-    if (!owned) return res.status(404).json({ message: "Not found" });
+    if (!owned) return res.status(404).json({ message: "Budget not found" });
 
-    const schema = api.budgets.update.input.extend({
-      amountLimit: z.coerce.number().optional(),
-    });
-    const input = parseBody(schema, req.body, res);
-    if (!input) return;
+    try {
+      const schema = api.budgets.update.input.extend({
+        amountLimit: z.coerce.number().optional(),
+      });
+      const input = schema.parse(req.body);
 
-    const updates: Record<string, any> = { ...input };
-    delete updates.userId;
-    if (updates.amountLimit !== undefined) updates.amountLimit = formatAmount(updates.amountLimit);
+      const updates: Record<string, any> = { ...input };
+      delete updates.userId;
+      if (updates.amountLimit !== undefined) updates.amountLimit = formatAmount(updates.amountLimit);
 
-    const updated = await storage.updateBudget(id, updates as any);
-    return res.json(updated);
+      const budget = await storage.updateBudget(id, updates as any);
+      res.json(budget);
+    } catch (error: any) {
+      res.status(400).json({
+        message: error.message || "Validation failed",
+        errors: error.errors || []
+      });
+    }
   });
 
   app.delete(api.budgets.delete.path, async (req: any, res) => {
     if (!requireAuth(req, res)) return;
-    const id = parseId(req.params.id, res);
-    if (id === null) return;
-
+    const id = parseId(req.params.id);
+    if (!id) return badRequest(res, "Invalid budget id");
     const owned = (await storage.getBudgets(req.user.id)).find((budget) => budget.id === id);
-    if (!owned) return res.status(404).json({ message: "Not found" });
-
+    if (!owned) return res.status(404).json({ message: "Budget not found" });
     await storage.deleteBudget(id);
-    return res.status(204).end();
+    res.sendStatus(204);
   });
 
-  // === GOALS ===
-  app.get(api.goals.list.path, async (req: any, res) => {
+  /* ================= GOALS ================= */
+
+  app.get(api.goals.list.path, async (req, res) => {
     if (!requireAuth(req, res)) return;
-    const goals = await storage.getGoals(req.user.id);
-    res.json(goals);
+    res.json(await storage.getGoals(req.user.id));
   });
 
   app.post(api.goals.create.path, async (req: any, res) => {
     if (!requireAuth(req, res)) return;
-    const schema = api.goals.create.input.extend({
-      targetAmount: z.coerce.number(),
-      deadline: z.coerce.date().optional(),
-    });
-    const input = parseBody(schema, req.body, res);
-    if (!input) return;
 
-    const created = await storage.createGoal({
-      ...input,
-      userId: req.user.id,
-      targetAmount: formatAmount(input.targetAmount),
-      deadline: input.deadline || null,
-    } as any);
+    try {
+      const schema = api.goals.create.input.extend({
+        targetAmount: z.coerce.number(),
+        deadline: z.coerce.date().optional(),
+      });
+      const input = schema.parse(req.body);
 
-    return res.status(201).json(created);
+      const goal = await storage.createGoal({
+        ...input,
+        userId: req.user.id,
+        targetAmount: formatAmount(input.targetAmount),
+        deadline: input.deadline || null,
+      } as any);
+
+      res.status(201).json(goal);
+    } catch (error: any) {
+      res.status(400).json({
+        message: error.message || "Validation failed",
+        errors: error.errors || []
+      });
+    }
   });
 
   app.put(api.goals.update.path, async (req: any, res) => {
     if (!requireAuth(req, res)) return;
-    const id = parseId(req.params.id, res);
-    if (id === null) return;
-
+    const id = parseId(req.params.id);
+    if (!id) return badRequest(res, "Invalid goal id");
     const existing = (await storage.getGoals(req.user.id)).find((goal) => goal.id === id);
-    if (!existing) return res.status(404).json({ message: "Not found" });
+    if (!existing) return res.status(404).json({ message: "Goal not found" });
 
-    const schema = api.goals.update.input.extend({
-      targetAmount: z.coerce.number().optional(),
-      deadline: z.coerce.date().optional(),
-      addToCurrentAmount: z.coerce.number().optional(),
-    });
-    const input = parseBody(schema, req.body, res);
-    if (!input) return;
+    try {
+      const schema = api.goals.update.input.extend({
+        targetAmount: z.coerce.number().optional(),
+        deadline: z.coerce.date().optional(),
+        addToCurrentAmount: z.coerce.number().optional(),
+      });
+      const input = schema.parse(req.body);
 
-    const updates: Record<string, any> = { ...input };
-    delete updates.userId;
+      const updates: Record<string, any> = { ...input };
+      delete updates.userId;
 
-    if (updates.targetAmount !== undefined) updates.targetAmount = formatAmount(updates.targetAmount);
-    if (updates.deadline !== undefined) updates.deadline = new Date(updates.deadline);
+      if (updates.targetAmount !== undefined) updates.targetAmount = formatAmount(updates.targetAmount);
+      if (updates.deadline !== undefined) updates.deadline = new Date(updates.deadline);
+      if (updates.currentAmount !== undefined) updates.currentAmount = formatAmount(updates.currentAmount);
 
-    if (updates.addToCurrentAmount !== undefined) {
-      const current = toNumber((existing as any).currentAmount);
-      updates.currentAmount = formatAmount(current + toNumber(updates.addToCurrentAmount));
-      delete updates.addToCurrentAmount;
+      if (updates.addToCurrentAmount !== undefined) {
+        const current = toNumber((existing as any).currentAmount);
+        updates.currentAmount = formatAmount(current + toNumber(updates.addToCurrentAmount));
+        delete updates.addToCurrentAmount;
+      }
+
+      const updatedGoal = await storage.updateGoal(id, updates as any);
+      res.json(updatedGoal);
+    } catch (error: any) {
+      res.status(400).json({
+        message: error.message || "Validation failed",
+        errors: error.errors || []
+      });
     }
-
-    const currentAmount = updates.currentAmount !== undefined
-      ? toNumber(updates.currentAmount)
-      : toNumber((existing as any).currentAmount);
-    const targetAmount = updates.targetAmount !== undefined
-      ? toNumber(updates.targetAmount)
-      : toNumber(existing.targetAmount);
-    updates.isCompleted = targetAmount > 0 && currentAmount >= targetAmount;
-
-    const updated = await storage.updateGoal(id, updates as any);
-    return res.json(updated);
   });
 
   app.delete(api.goals.delete.path, async (req: any, res) => {
     if (!requireAuth(req, res)) return;
-    const id = parseId(req.params.id, res);
-    if (id === null) return;
-
+    const id = parseId(req.params.id);
+    if (!id) return badRequest(res, "Invalid goal id");
     const existing = (await storage.getGoals(req.user.id)).find((goal) => goal.id === id);
-    if (!existing) return res.status(404).json({ message: "Not found" });
-
+    if (!existing) return res.status(404).json({ message: "Goal not found" });
     await storage.deleteGoal(id);
-    return res.status(204).end();
+    res.sendStatus(204);
   });
 
-  // === ANALYTICS ===
-  app.get(api.analytics.dashboard.path, async (req: any, res) => {
+  /* ================= ANALYTICS : DASHBOARD ================= */
+
+  app.get(api.analytics.dashboard.path, async (req, res) => {
     if (!requireAuth(req, res)) return;
 
-    const transactions = await storage.getTransactions(req.user.id);
-    const sorted = [...transactions].sort(
-      (a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime()
-    );
+    const txs = await storage.getTransactions(req.user.id);
 
-    let totalIncome = 0;
-    let totalExpenses = 0;
-    const categoryTotals = new Map<string, number>();
+    let income = 0;
+    let expense = 0;
+    const map = new Map<string, number>();
 
-    for (const tx of sorted) {
-      const amount = toNumber(tx.amount);
-      if (tx.type === "income") {
-        totalIncome += amount;
-      } else {
-        totalExpenses += amount;
-        const category = tx.category || "Uncategorized";
-        categoryTotals.set(category, (categoryTotals.get(category) || 0) + amount);
+    for (const t of txs) {
+      const amt = toNumber(t.amount);
+      if (t.type === "income") income += amt;
+      else {
+        expense += amt;
+        const cat = t.category || "Uncategorized";
+        map.set(cat, (map.get(cat) || 0) + amt);
       }
     }
 
-    const savings = totalIncome - totalExpenses;
-    const savingsRate = totalIncome > 0 ? savings / totalIncome : 0;
-    let healthScore = 40;
-    if (savings > 0) healthScore += 20;
-    if (savingsRate >= 0.2) healthScore += 15;
-    if (savingsRate >= 0.4) healthScore += 10;
-    if (totalExpenses <= totalIncome) healthScore += 15;
-    healthScore = Math.max(0, Math.min(100, healthScore));
-
-    const categoryBreakdown = Array.from(categoryTotals.entries()).map(([category, amount], index) => ({
-      category,
-      amount: Number(amount.toFixed(2)),
-      color: CATEGORY_COLORS[index % CATEGORY_COLORS.length],
+    const breakdown = [...map.entries()].map(([c, a], i) => ({
+      category: c,
+      amount: Number(a.toFixed(2)),
+      color: CATEGORY_COLORS[i % CATEGORY_COLORS.length],
     }));
 
-    return res.json({
-      totalIncome: Number(totalIncome.toFixed(2)),
-      totalExpenses: Number(totalExpenses.toFixed(2)),
-      savings: Number(savings.toFixed(2)),
-      healthScore,
-      recentTransactions: sorted.slice(0, 5),
-      categoryBreakdown,
+    res.json({
+      totalIncome: income,
+      totalExpenses: expense,
+      savings: income - expense,
+      healthScore: income > expense ? 70 : 40,
+      recentTransactions: txs.slice(0, 5),
+      categoryBreakdown: breakdown,
     });
   });
 
-  app.get(api.analytics.tax.path, async (req: any, res) => {
-    if (!requireAuth(req, res)) return;
+  /* ================= ANALYTICS : TAX ================= */
 
-    const transactions = await storage.getTransactions(req.user.id);
-    const income = transactions
-      .filter((tx) => tx.type === "income")
-      .reduce((sum, tx) => sum + toNumber(tx.amount), 0);
+  /* ================= ANALYTICS : TAX ================= */
 
-    const deductible = transactions.filter(
-      (tx) => tx.type !== "income" && Boolean(tx.isTaxDeductible)
+app.get(api.analytics.tax.path, async (req: any, res) => {
+  if (!requireAuth(req, res)) return;
+
+  try {
+    const txs = await storage.getTransactions(req.user.id);
+
+    // 1. Total income (income ONLY)
+    const totalIncome = txs
+      .filter(t => t.type === "income")
+      .reduce((sum, t) => sum + toNumber(t.amount), 0);
+
+    // 2. Deductible EXPENSES ONLY
+    const deductibleExpensesTxs = txs.filter(
+      t => t.type === "expense" && t.isTaxDeductible === true
     );
-    const deductibleExpenses = deductible.reduce((sum, tx) => sum + toNumber(tx.amount), 0);
 
-    const taxBreakdownMap = new Map<string, number>();
-    for (const tx of deductible) {
-      const key = tx.taxCategory || tx.category || "Other";
-      taxBreakdownMap.set(key, (taxBreakdownMap.get(key) || 0) + toNumber(tx.amount));
-    }
+    const deductibleExpenses = deductibleExpensesTxs.reduce(
+      (sum, t) => sum + toNumber(t.amount),
+      0
+    );
 
-    const taxableIncome = Math.max(0, income - deductibleExpenses);
+    // 3. Taxable income
+    const taxableIncome = Math.max(0, totalIncome - deductibleExpenses);
+
+    // 4. Simple demo tax (10%)
     const estimatedTax = taxableIncome * 0.1;
-    const potentialSavings = Math.max(0, 150000 - deductibleExpenses) * 0.1;
 
-    const taxBreakdown = Array.from(taxBreakdownMap.entries()).map(([category, amount]) => ({
-      category,
-      amount: Number(amount.toFixed(2)),
-    }));
-
-    return res.json({
-      estimatedTax: Number(estimatedTax.toFixed(2)),
-      deductibleExpenses: Number(deductibleExpenses.toFixed(2)),
-      potentialSavings: Number(potentialSavings.toFixed(2)),
-      taxBreakdown,
-    });
-  });
-
-  // === AI ===
-  app.post(api.ai.categorize.path, async (req: any, res) => {
-    if (!requireAuth(req, res)) return;
-    const input = parseBody(api.ai.categorize.input, req.body, res);
-    if (!input) return;
-
-    try {
-      const completion: any = await gemini.chat.completions.create({
-        model: process.env.AI_CHAT_MODEL || process.env.GEMINI_MODEL || "gemini-2.0-flash",
-        messages: [
-          {
-            role: "system",
-            content:
-              "Categorize this finance transaction and return JSON with keys: category, confidence, isTaxDeductible, taxCategory.",
-          },
-          { role: "user", content: `${input.description} ${input.amount ?? ""}`.trim() },
-        ],
-        response_format: { type: "json_object" },
-      });
-
-      const parsed = parseJsonContent(extractAssistantText(completion));
-
-      return res.json({
-        category: typeof parsed.category === "string" ? parsed.category : "Uncategorized",
-        confidence: typeof parsed.confidence === "number" ? parsed.confidence : 0.5,
-        isTaxDeductible: Boolean(parsed.isTaxDeductible),
-        taxCategory: typeof parsed.taxCategory === "string" ? parsed.taxCategory : undefined,
-      });
-    } catch (error) {
-      console.error("AI categorize failed; returning fallback category:", error);
-      return res.json({
-        category: "Uncategorized",
-        confidence: 0.2,
-        isTaxDeductible: false,
-      });
+    // 5. Breakdown by tax category (expenses only)
+    const breakdownMap = new Map<string, number>();
+    for (const t of deductibleExpensesTxs) {
+      const key = t.taxCategory || t.category || "Other";
+      breakdownMap.set(key, (breakdownMap.get(key) || 0) + toNumber(t.amount));
     }
-  });
+
+    res.json({
+      estimatedTax,
+      deductibleExpenses,
+      potentialSavings: Math.max(0, 150000 - deductibleExpenses) * 0.1,
+      taxBreakdown: [...breakdownMap.entries()].map(([category, amount]) => ({
+        category,
+        amount,
+      })),
+    });
+  } catch (err) {
+    console.error("Tax analytics error:", err);
+    res.status(500).json({ message: "Failed to calculate tax analytics" });
+  }
+});
+
+
+  /* ================= AI : CATEGORIZE ================= */
+
+  /* ================= AI : CATEGORIZE ================= */
+
+app.post(api.ai.categorize.path, async (req: any, res) => {
+  if (!requireAuth(req, res)) return;
+
+  try {
+    const { description } = req.body;
+
+    if (!description || typeof description !== "string") {
+      return res.status(400).json({ message: "Description required" });
+    }
+
+    const normalized = description.trim().toLowerCase();
+
+    /* ✅ BACKEND CACHE HIT */
+    if (categorizeCache.has(normalized)) {
+      return res.json(categorizeCache.get(normalized));
+    }
+
+    /* === RULE-BASED CATEGORIZATION === */
+    let category = "Uncategorized";
+    let isTaxDeductible = false;
+    let taxCategory: string | undefined;
+
+    if (/(food|restaurant|cafe|coffee|lunch|dinner|breakfast|pizza|burger|meal|groceries|grocery)/i.test(normalized)) {
+      category = "Food";
+    } else if (/(uber|lyft|taxi|cab|bus|train|metro|fuel|gas|parking)/i.test(normalized)) {
+      category = "Transportation";
+    } else if (/(shop|store|amazon|mall|clothes|shoes|fashion)/i.test(normalized)) {
+      category = "Shopping";
+    } else if (/(movie|cinema|concert|game|gym|fitness)/i.test(normalized)) {
+      category = "Entertainment";
+    } else if (/(electric|water|internet|phone|rent|bill|utility)/i.test(normalized)) {
+      category = "Bills";
+      isTaxDeductible = true;
+      taxCategory = "Business Expenses";
+    } else if (/(doctor|hospital|medicine|pharmacy|medical|health)/i.test(normalized)) {
+      category = "Healthcare";
+      isTaxDeductible = true;
+      taxCategory = "Medical";
+    } else if (/(gift|flower|present|donation)/i.test(normalized)) {
+      category = "Gifts";
+    }
+
+    const result = {
+      category,
+      confidence: 0.8,
+      isTaxDeductible,
+      taxCategory,
+    };
+
+    /* ✅ STORE RESULT */
+    categorizeCache.set(normalized, result);
+
+    return res.json(result);
+
+  } catch (error) {
+    console.error("Categorization error:", error);
+    return res.json({
+      category: "Uncategorized",
+      confidence: 0,
+      isTaxDeductible: false,
+    });
+  }
+});
+
+
+  /* ================= AI : CHAT ================= */
 
   app.post(api.ai.chat.path, async (req: any, res) => {
     if (!requireAuth(req, res)) return;
-    const input = parseBody(api.ai.chat.input, req.body, res);
-    if (!input) return;
-
-    const messages: Array<{ role: "system" | "user"; content: string }> = [
-      {
-        role: "system",
-        content:
-          "You are a concise personal finance advisor. Give practical, safe, actionable guidance for a demo app.",
-      },
-    ];
-
-    if (input.context !== undefined) {
-      messages.push({
-        role: "system",
-        content: `Context: ${JSON.stringify(input.context)}`,
-      });
-    }
-
-    messages.push({
-      role: "user",
-      content: input.message,
-    });
 
     try {
-      const completion: any = await gemini.chat.completions.create({
-        model: process.env.AI_CHAT_MODEL || process.env.GEMINI_MODEL || "gemini-2.0-flash",
-        messages,
+      const userId = req.user.id;
+
+      // Fetch ALL user financial data
+      const transactions = await storage.getTransactions(userId);
+      const budgets = await storage.getBudgets(userId);
+      const goals = await storage.getGoals(userId);
+
+      // Calculate totals
+      const incomeTx = transactions.filter(t => t.type === "income");
+      const expenseTx = transactions.filter(t => t.type === "expense");
+
+      const totalIncome = incomeTx.reduce((s, t) => s + toNumber(t.amount), 0);
+      const totalExpenses = expenseTx.reduce((s, t) => s + toNumber(t.amount), 0);
+      const savings = totalIncome - totalExpenses;
+
+      // Calculate category breakdown
+      const categoryTotals = new Map<string, number>();
+      for (const t of expenseTx) {
+        const cat = t.category || "Uncategorized";
+        categoryTotals.set(cat, (categoryTotals.get(cat) || 0) + toNumber(t.amount));
+      }
+
+      // Sort categories by spending (highest first)
+      const sortedCategories = [...categoryTotals.entries()].sort((a, b) => b[1] - a[1]);
+      
+      // Identify budget breaches
+      const budgetBreaches = budgets
+        .map(b => {
+          const spent = categoryTotals.get(b.category) || 0;
+          const limit = toNumber(b.amountLimit);
+          if (spent > limit) {
+            return {
+              category: b.category,
+              spent: spent.toFixed(2),
+              limit: limit.toFixed(2),
+              overage: (spent - limit).toFixed(2)
+            };
+          }
+          return null;
+        })
+        .filter(Boolean);
+
+      // Build structured context for AI
+      const contextParts = [
+        "=== FINANCIAL SUMMARY ===",
+        `Total Income: ₹${totalIncome.toFixed(2)}`,
+        `Total Expenses: ₹${totalExpenses.toFixed(2)}`,
+        `Net Savings: ₹${savings.toFixed(2)}`,
+        "",
+        "=== SPENDING BY CATEGORY ===",
+      ];
+
+      if (sortedCategories.length > 0) {
+        sortedCategories.forEach(([category, amount]) => {
+          contextParts.push(`${category}: ₹${amount.toFixed(2)}`);
+        });
+        contextParts.push("");
+        contextParts.push("=== HIGHEST SPENDING CATEGORY ===");
+        contextParts.push(`${sortedCategories[0][0]}: ₹${sortedCategories[0][1].toFixed(2)}`);
+      } else {
+        contextParts.push("No expense categories recorded");
+      }
+
+      contextParts.push("");
+      contextParts.push("=== BUDGET STATUS ===");
+      if (budgetBreaches.length > 0) {
+        budgetBreaches.forEach((breach: any) => {
+          contextParts.push(
+            `⚠️ ${breach.category}: Spent ₹${breach.spent}, Limit ₹${breach.limit}, Over by ₹${breach.overage}`
+          );
+        });
+      } else if (budgets.length > 0) {
+        contextParts.push("All budgets within limits ✓");
+      } else {
+        contextParts.push("No budgets set");
+      }
+
+      contextParts.push("");
+      contextParts.push("=== RECENT TRANSACTIONS ===");
+      if (expenseTx.length > 0) {
+        expenseTx.slice(0, 5).forEach(t => {
+          contextParts.push(`• ${t.description}: ₹${toNumber(t.amount).toFixed(2)} (${t.category || "Uncategorized"})`);
+        });
+      } else {
+        contextParts.push("No transactions recorded");
+      }
+
+      contextParts.push("");
+      contextParts.push("=== FINANCIAL GOALS ===");
+      if (goals.length > 0) {
+        goals.forEach(g => {
+          const current = toNumber(g.currentAmount);
+          const target = toNumber(g.targetAmount);
+          const progress = target > 0 ? ((current / target) * 100).toFixed(0) : "0";
+          contextParts.push(`• ${g.name}: ₹${current.toFixed(2)} / ₹${target.toFixed(2)} (${progress}% complete)`);
+        });
+      } else {
+        contextParts.push("No active goals");
+      }
+
+      const context = contextParts.join("\n");
+
+      // Call AI with structured context
+      const completion = await gemini.chat.completions.create({
+        messages: [
+          { role: "system", content: context },
+          { role: "user", content: req.body.message },
+        ],
       });
 
-      const response = extractAssistantText(completion) || "I could not generate a response right now.";
-      return res.json({ response });
-    } catch (error) {
-      console.error("AI chat failed; returning fallback response:", error);
+      return res.json({
+        response: completion.choices[0].message.content,
+      });
+
+    } catch (err) {
+      console.error("AI chat failed:", err);
+      
+      // Fallback response
       return res.json({
         response:
-          "AI is temporarily unavailable. You can still use transactions, budgets, and goals while we reconnect the model.",
+          "I'm having trouble analyzing your financial data right now. Please check that you have transactions recorded, and try asking a specific question about your income, expenses, or savings goals.",
       });
     }
   });

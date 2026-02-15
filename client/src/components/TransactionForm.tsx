@@ -12,20 +12,32 @@ import {
   FormLabel,
   FormMessage,
 } from "@/components/ui/form";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
-import { useCreateTransaction, useCategorizeTransaction } from "@/hooks/use-transactions";
+import {
+  useCreateTransaction,
+  useCategorizeTransaction,
+} from "@/hooks/use-transactions";
 import { Loader2, Sparkles } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 
-// Schema with string coercion for numbers/dates
+/* ================= SCHEMA ================= */
+
 const formSchema = insertTransactionSchema.omit({ userId: true }).extend({
   amount: z.coerce.number().min(0.01, "Amount must be greater than 0"),
   date: z.coerce.date(),
 });
 
 type FormValues = z.infer<typeof formSchema>;
+
+/* ================= COMPONENT ================= */
 
 export function TransactionForm({ onSuccess }: { onSuccess: () => void }) {
   const { toast } = useToast();
@@ -46,35 +58,53 @@ export function TransactionForm({ onSuccess }: { onSuccess: () => void }) {
     },
   });
 
+  /* ================= WATCHED VALUES ================= */
+
   const description = form.watch("description");
   const amount = form.watch("amount");
 
-  // Auto-categorize when description changes
+  /* ================= AI GUARD ================= */
+
+  // Prevent repeated categorization for same description
+  const lastCategorizedRef = useRef<string | null>(null);
+
+  /* ================= AUTO CATEGORIZE ================= */
+
   useEffect(() => {
     const timer = setTimeout(() => {
-      const text = description ?? "";
-      if (text.length > 3) {
-        categorizeMutation.mutate(
-          { description: text, amount: Number(amount ?? 0) },
-          {
-            onSuccess: (data) => {
-              form.setValue("category", data.category);
-              form.setValue("isTaxDeductible", data.isTaxDeductible);
-              if (data.taxCategory) {
-                form.setValue("taxCategory", data.taxCategory);
-              }
-              toast({
-                title: "AI Suggestion",
-                description: `Categorized as ${data.category} (${(data.confidence * 100).toFixed(0)}% confidence)`,
+      const text = (description ?? "").trim();
+
+      if (text.length <= 3) return;
+
+      // 🛑 Stop repeated categorization
+      if (lastCategorizedRef.current === text) return;
+
+      lastCategorizedRef.current = text;
+
+      categorizeMutation.mutate(
+        { description: text, amount: Number(amount ?? 0) },
+        {
+          onSuccess: (data) => {
+            // Update derived fields WITHOUT retriggering logic
+            form.setValue("category", data.category, { shouldDirty: false });
+            form.setValue("isTaxDeductible", data.isTaxDeductible, {
+              shouldDirty: false,
+            });
+
+            if (data.taxCategory) {
+              form.setValue("taxCategory", data.taxCategory, {
+                shouldDirty: false,
               });
-            },
-          }
-        );
-      }
+            }
+          },
+        }
+      );
     }, 1000); // 1s debounce
 
     return () => clearTimeout(timer);
-  }, [description, amount, categorizeMutation, form, toast]);
+  }, [description, amount, categorizeMutation, form]);
+
+  /* ================= SUBMIT ================= */
 
   function onSubmit(values: FormValues) {
     createMutation.mutate(values, {
@@ -83,14 +113,20 @@ export function TransactionForm({ onSuccess }: { onSuccess: () => void }) {
         onSuccess();
       },
       onError: () => {
-        toast({ title: "Failed to add transaction", variant: "destructive" });
+        toast({
+          title: "Failed to add transaction",
+          variant: "destructive",
+        });
       },
     });
   }
 
+  /* ================= UI ================= */
+
   return (
     <Form {...form}>
       <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+        {/* Description */}
         <FormField
           control={form.control}
           name="description"
@@ -99,7 +135,11 @@ export function TransactionForm({ onSuccess }: { onSuccess: () => void }) {
               <FormLabel>Description</FormLabel>
               <div className="relative">
                 <FormControl>
-                  <Input placeholder="Uber ride, Grocery..." {...field} value={field.value || ''} />
+                  <Input
+                    placeholder="Uber ride, Grocery..."
+                    {...field}
+                    value={field.value || ""}
+                  />
                 </FormControl>
                 {categorizeMutation.isPending && (
                   <Sparkles className="absolute right-3 top-2.5 h-4 w-4 animate-pulse text-primary" />
@@ -110,6 +150,7 @@ export function TransactionForm({ onSuccess }: { onSuccess: () => void }) {
           )}
         />
 
+        {/* Amount & Type */}
         <div className="grid grid-cols-2 gap-4">
           <FormField
             control={form.control}
@@ -131,7 +172,7 @@ export function TransactionForm({ onSuccess }: { onSuccess: () => void }) {
             render={({ field }) => (
               <FormItem>
                 <FormLabel>Type</FormLabel>
-                <Select onValueChange={field.onChange} defaultValue={field.value}>
+                <Select onValueChange={field.onChange} value={field.value}>
                   <FormControl>
                     <SelectTrigger>
                       <SelectValue placeholder="Select type" />
@@ -148,6 +189,7 @@ export function TransactionForm({ onSuccess }: { onSuccess: () => void }) {
           />
         </div>
 
+        {/* Category & Date */}
         <div className="grid grid-cols-2 gap-4">
           <FormField
             control={form.control}
@@ -163,10 +205,10 @@ export function TransactionForm({ onSuccess }: { onSuccess: () => void }) {
                   </FormControl>
                   <SelectContent>
                     <SelectItem value="Food">Food</SelectItem>
-                    <SelectItem value="Transport">Transport</SelectItem>
+                    <SelectItem value="Transportation">Transportation</SelectItem>
                     <SelectItem value="Shopping">Shopping</SelectItem>
                     <SelectItem value="Bills">Bills</SelectItem>
-                    <SelectItem value="Health">Health</SelectItem>
+                    <SelectItem value="Healthcare">Healthcare</SelectItem>
                     <SelectItem value="Salary">Salary</SelectItem>
                     <SelectItem value="Investment">Investment</SelectItem>
                     <SelectItem value="Uncategorized">Uncategorized</SelectItem>
@@ -184,10 +226,16 @@ export function TransactionForm({ onSuccess }: { onSuccess: () => void }) {
               <FormItem>
                 <FormLabel>Date</FormLabel>
                 <FormControl>
-                  <Input 
-                    type="date" 
-                    value={field.value instanceof Date ? field.value.toISOString().split('T')[0] : field.value}
-                    onChange={(e) => field.onChange(new Date(e.target.value))}
+                  <Input
+                    type="date"
+                    value={
+                      field.value instanceof Date
+                        ? field.value.toISOString().split("T")[0]
+                        : field.value
+                    }
+                    onChange={(e) =>
+                      field.onChange(new Date(e.target.value))
+                    }
                   />
                 </FormControl>
                 <FormMessage />
@@ -196,6 +244,7 @@ export function TransactionForm({ onSuccess }: { onSuccess: () => void }) {
           />
         </div>
 
+        {/* Tax Deductible */}
         <FormField
           control={form.control}
           name="isTaxDeductible"
@@ -208,18 +257,21 @@ export function TransactionForm({ onSuccess }: { onSuccess: () => void }) {
                 />
               </FormControl>
               <div className="space-y-1 leading-none">
-                <FormLabel>
-                  Tax Deductible
-                </FormLabel>
+                <FormLabel>Tax Deductible</FormLabel>
                 <p className="text-sm text-muted-foreground">
-                  Mark this if it qualifies for tax deductions (e.g. 80C)
+                  Mark if this qualifies for tax deductions
                 </p>
               </div>
             </FormItem>
           )}
         />
 
-        <Button type="submit" className="w-full" disabled={createMutation.isPending}>
+        {/* Submit */}
+        <Button
+          type="submit"
+          className="w-full"
+          disabled={createMutation.isPending}
+        >
           {createMutation.isPending ? (
             <>
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />

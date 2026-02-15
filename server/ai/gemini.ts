@@ -1,209 +1,102 @@
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const GEMINI_API_URL =
-  (process.env.GEMINI_API_URL || "https://generativelanguage.googleapis.com").replace(/\/$/, "");
-const GEMINI_API_VERSION = process.env.GEMINI_API_VERSION || "v1beta";
-const DEFAULT_GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-1.5-flash";
+const GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1";
+const CHAT_MODEL = "models/gemini-2.5-flash";
 
 if (!GEMINI_API_KEY) {
-  console.warn("GEMINI_API_KEY not set — Gemini adapter will be inactive.");
+  console.warn("GEMINI_API_KEY not set");
 }
 
-function withApiKey(path: string): string {
-  const separator = path.includes("?") ? "&" : "?";
-  return `${GEMINI_API_URL}${path}${separator}key=${GEMINI_API_KEY}`;
+/* ================= HELPERS ================= */
+async function geminiPost(prompt: string) {
+  const res = await fetch(
+    `${GEMINI_API_URL}/${CHAT_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
+        generationConfig: {
+          temperature: 0.1,   // 🔒 VERY LOW TEMP = STICK TO FACTS
+          maxOutputTokens: 512,
+        },
+      }),
+    }
+  );
+
+  if (!res.ok) throw new Error(await res.text());
+  const json = await res.json();
+  return json?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "";
 }
 
-class GeminiHttpError extends Error {
-  status: number;
-  body: string;
+/* ================= CHAT (STRICT) ================= */
+async function generateChatReply(message: string, context: string): Promise<string> {
+  const prompt = `
+You are a personal finance advisor analyzing ACTUAL user data.
 
-  constructor(status: number, statusText: string, body: string) {
-    super(`Gemini API ${status} ${statusText}: ${body}`);
-    this.name = "GeminiHttpError";
-    this.status = status;
-    this.body = body;
-  }
-}
+⚠️ CRITICAL RULES - NEVER VIOLATE:
+1. Use ONLY the categories and amounts shown in "FINANCIAL ANALYSIS" below
+2. NEVER mention categories not listed (e.g., if "Dining Out" isn't listed, DON'T mention it)
+3. NEVER invent or assume spending patterns
+4. If a category shows "Uncategorized", say "Uncategorized" - don't guess what it might be
+5. Use EXACT amounts from the data
+6. Be direct and confident - this is THEIR actual data
 
-async function apiPost(path: string, body: any) {
-  if (!GEMINI_API_KEY) {
-    throw new Error("GEMINI_API_KEY is not set");
-  }
+FINANCIAL ANALYSIS (THIS IS THE ONLY SOURCE OF TRUTH):
+${context}
 
-  const res = await fetch(withApiKey(path), {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(body),
-  });
+YOUR TASK:
+Answer the user's question using ONLY the data above. Structure your response:
+1. State the main financial finding (income vs expenses, savings status)
+2. Identify the highest spending category BY NAME and EXACT AMOUNT from the data
+3. Explain the impact (e.g., negative savings, budget breach)
+4. Give 1-2 specific, actionable steps
 
-  if (!res.ok) {
-    const text = await res.text();
-    throw new GeminiHttpError(res.status, res.statusText, text);
-  }
+Response length: 4-6 sentences
+Tone: Professional, direct, helpful
+DO NOT: Ask questions, use vague language like "seems" or "might be", or mention data not provided
 
-  return res.json();
-}
+USER QUESTION:
+${message}
+`;
 
-function toText(content: any): string {
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    return content
-      .map((part) => {
-        if (typeof part === "string") return part;
-        if (part && typeof part.text === "string") return part.text;
-        return "";
-      })
-      .join(" ")
-      .trim();
-  }
-  return "";
-}
-
-function toGeminiContents(messages: any[]) {
-  const systemInstructions = messages
-    .filter((m) => m?.role === "system")
-    .map((m) => toText(m.content))
-    .filter(Boolean)
-    .join("\n");
-
-  const chatContents = messages
-    .filter((m) => m?.role !== "system")
-    .map((m) => {
-      const text = toText(m.content);
-      if (!text) return null;
-      return {
-        role: m.role === "assistant" ? "model" : "user",
-        parts: [{ text }],
-      };
-    })
-    .filter(Boolean);
-
-  if (systemInstructions) {
-    chatContents.unshift({
-      role: "user",
-      parts: [{ text: `System instructions:\n${systemInstructions}` }],
-    });
-  }
-
-  if (chatContents.length === 0) {
-    chatContents.push({
-      role: "user",
-      parts: [{ text: "" }],
-    });
-  }
-
-  return chatContents;
-}
-
-function extractGeneratedText(json: any): string {
-  const candidates = json?.candidates;
-  if (!Array.isArray(candidates)) return "";
-
-  const text = candidates
-    .map((candidate: any) =>
-      (candidate?.content?.parts || [])
-        .map((part: any) => (typeof part?.text === "string" ? part.text : ""))
-        .join("")
-    )
-    .join("\n")
-    .trim();
-
-  return text;
-}
-
-function uniqueModels(models: string[]) {
-  return [...new Set(models.map((m) => m.trim()).filter(Boolean))];
-}
-
-function candidateModels(requestedModel?: string) {
-  return uniqueModels([
-    requestedModel || "",
-    process.env.GEMINI_MODEL || "",
-    process.env.GEMINI_FALLBACK_MODEL || "",
-    "gemini-2.0-flash",
-    "gemini-2.0-flash-lite",
-    "gemini-1.5-flash",
-    "gemini-1.5-pro",
-  ]);
-}
-
-async function tryGenerateWithModel(model: string, body: any) {
-  return apiPost(`/${GEMINI_API_VERSION}/models/${model}:generateContent`, body);
-}
-
-async function generateWithFallback(opts: { model?: string; body: any }) {
-  const models = candidateModels(opts.model || DEFAULT_GEMINI_MODEL);
-  let lastError: unknown = null;
-
-  for (const model of models) {
-    try {
-      const json = await tryGenerateWithModel(model, opts.body);
-      return { json, model };
-    } catch (error: any) {
-      lastError = error;
-      if (!(error instanceof GeminiHttpError) || error.status !== 404) {
-        throw error;
-      }
+  try {
+    const reply = await geminiPost(prompt);
+    
+    // Validate response isn't empty or too short
+    if (!reply || reply.length < 50) {
+      throw new Error("Response too short");
+    }
+    
+    return reply;
+  } catch (error) {
+    console.error("Gemini API error:", error);
+    
+    // Intelligent fallback based on actual context
+    if (context.includes("Savings: ₹-")) {
+      return "Your expenses currently exceed your income, creating a negative savings situation. Based on your transaction data, focus on reducing your highest spending category and establishing a strict monthly budget limit to restore positive cash flow.";
+    } else if (context.includes("Highest Spending Category:")) {
+      return "Review your spending breakdown above to identify optimization opportunities. Focus on the highest spending category and set a realistic monthly limit to improve your savings rate.";
+    } else {
+      return "Your financial data has been analyzed. Focus on tracking all expenses, categorizing transactions accurately, and setting monthly budget limits for your top spending categories to build sustainable savings habits.";
     }
   }
-
-  throw lastError || new Error("No compatible Gemini model found");
 }
 
+/* ================= PUBLIC API ================= */
 export const gemini = {
   chat: {
     completions: {
       async create(opts: any) {
-        const requestedModel = opts?.model || DEFAULT_GEMINI_MODEL;
-        const generationConfig: Record<string, any> = {
-          maxOutputTokens: opts?.max_completion_tokens || 1024,
+        const userMsg =
+          opts.messages.find((m: any) => m.role === "user")?.content || "";
+        const context =
+          opts.messages.find((m: any) => m.role === "system")?.content || "";
+
+        const reply = await generateChatReply(userMsg, context);
+
+        return {
+          choices: [{ message: { content: reply } }],
         };
-
-        if (opts?.response_format?.type === "json_object") {
-          generationConfig.responseMimeType = "application/json";
-        }
-
-        const body = {
-          contents: toGeminiContents(opts?.messages || []),
-          generationConfig,
-        };
-
-        const { json } = await generateWithFallback({ model: requestedModel, body });
-        const text = extractGeneratedText(json);
-
-        if (opts?.stream) {
-          const stream = async function* () {
-            yield { choices: [{ delta: { content: text } }] };
-          };
-          return stream();
-        }
-
-        return { choices: [{ message: { content: text } }] };
-      },
-    },
-  },
-
-  images: {
-    async generate(opts: any) {
-      const model = process.env.GEMINI_IMAGE_MODEL || DEFAULT_GEMINI_MODEL;
-      const prompt = opts?.prompt || opts?.prompt_text || "";
-      const json = await apiPost(`/${GEMINI_API_VERSION}/models/${model}:generateContent`, {
-        contents: [{ role: "user", parts: [{ text: prompt }] }],
-      });
-
-      const text = extractGeneratedText(json);
-      return { data: [{ b64_json: null, text }] };
-    },
-  },
-
-  audio: {
-    transcriptions: {
-      async create() {
-        throw new Error(
-          "Gemini audio transcription wrapper is not implemented. Use a supported transcription provider."
-        );
       },
     },
   },
