@@ -74,20 +74,51 @@ export async function registerRoutes(
   });
 
   /* ================= ANALYTICS TAX ================= */
-  app.get("/api/analytics/tax", async (req: any, res) => {
-    if (!requireAuth(req, res)) return;
-    // Example: sum up tax-deductible transactions by category
-    const txs = await storage.getTransactions(req.user.id);
-    const taxMap: Record<string, number> = {};
-    for (const t of txs) {
-      if (t.isTaxDeductible && t.taxCategory) {
-        taxMap[t.taxCategory] = (taxMap[t.taxCategory] || 0) + toNumber(t.amount);
-      }
+app.get("/api/analytics/tax", async (req: any, res) => {
+  if (!requireAuth(req, res)) return;
+
+  const txs = await storage.getTransactions(req.user.id);
+
+  let taxableIncome = 0;
+  let deductibleExpenses = 0;
+  const taxMap: Record<string, number> = {};
+
+  for (const t of txs) {
+    const amount = toNumber(t.amount);
+
+    // Income contributes to taxable income
+    if (t.type === "income") {
+      taxableIncome += amount;
     }
-    res.json({
-      taxBreakdown: Object.entries(taxMap).map(([cat, amt]) => ({ taxCategory: cat, amount: amt })),
-    });
+
+    // Deductible expenses
+    if (t.isTaxDeductible && t.taxCategory) {
+      deductibleExpenses += amount;
+      taxMap[t.taxCategory] =
+        (taxMap[t.taxCategory] || 0) + amount;
+    }
+  }
+
+  // VERY SIMPLE ESTIMATION (demo-friendly)
+  // India-like slab logic simplified
+  const estimatedTax =
+    taxableIncome > 500000
+      ? Math.round((taxableIncome - deductibleExpenses) * 0.2)
+      : 0;
+
+  const potentialSavings = Math.round(deductibleExpenses * 0.3);
+
+  res.json({
+    estimatedTax,
+    deductibleExpenses,
+    potentialSavings,
+    taxBreakdown: Object.entries(taxMap).map(([category, amount]) => ({
+      category,
+      amount: Number(amount.toFixed(2)),
+    })),
   });
+});
+
 
   /* ================= AUTH ================= */
 
@@ -282,17 +313,42 @@ export async function registerRoutes(
   /* ================= AI CHAT ================= */
 
   app.post(api.ai.chat.path, async (req: any, res) => {
-    if (!requireAuth(req, res)) return;
+  if (!requireAuth(req, res)) return;
 
-    const completion = await gemini.chat.completions.create({
-      messages: [
-        { role: "system", content: "You are a personal finance assistant." },
-        { role: "user", content: req.body.message },
-      ],
-    });
+  // 🔹 DEMO DATA (STATIC – FOR PRESENTATION)
+  const demoExpenses = `
+Here is my recent financial activity:
+- Uber ride: ₹20 (Transport, Expense)
+- Grocery shopping: ₹3,000 (Food, Expense)
+- Salary credited: ₹200,000 (Income)
+- Medical insurance: ₹12,000 (Health, Tax Deductible - 80D)
+`;
 
-    res.json({ response: completion.choices[0].message.content });
+  const completion = await gemini.chat.completions.create({
+    messages: [
+      {
+        role: "system",
+        content: `
+You are a friendly personal finance advisor.
+Answer ONLY based on the data below.
+Keep answers simple, short, and practical.
+
+FINANCIAL DATA:
+${demoExpenses}
+        `,
+      },
+      {
+        role: "user",
+        content: req.body.message,
+      },
+    ],
   });
+
+  res.json({
+    response: completion.choices[0].message.content,
+  });
+});
+
 
   return httpServer;
 }
