@@ -3,6 +3,8 @@ import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { Loader2 } from "lucide-react";
+
 import NotFound from "@/pages/not-found";
 import Dashboard from "@/pages/Dashboard";
 import Landing from "@/pages/Landing";
@@ -10,10 +12,13 @@ import Transactions from "@/pages/Transactions";
 import Goals from "@/pages/Goals";
 import Tax from "@/pages/Tax";
 import Login from "@/pages/Login";
+import Signup from "@/pages/Signup";
 import Budgets from "@/pages/Budgets";
 import Advisor from "@/pages/Advisor";
+
 import { useAuth } from "@/hooks/use-auth";
-import { Loader2 } from "lucide-react";
+
+/* ================= AUTH GUARD ================= */
 
 function PrivateRoute({ component: Component }: { component: React.ComponentType }) {
   const { user, isLoading } = useAuth();
@@ -31,21 +36,35 @@ function PrivateRoute({ component: Component }: { component: React.ComponentType
   return <Component />;
 }
 
+/* ================= ROUTER ================= */
+
 function Router() {
   const { user, isLoading } = useAuth();
 
-  if (isLoading) return <Loader2 className="animate-spin" />;
+  if (isLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <Loader2 className="animate-spin" />
+      </div>
+    );
+  }
 
   return (
     <Switch>
+      {/* Public */}
       <Route path="/">
         {user ? <Redirect to="/dashboard" /> : <Landing />}
       </Route>
 
       <Route path="/login">
-        <Login />
+        {user ? <Redirect to="/dashboard" /> : <Login />}
       </Route>
 
+      <Route path="/signup">
+        {user ? <Redirect to="/dashboard" /> : <Signup />}
+      </Route>
+
+      {/* Protected */}
       <Route path="/dashboard">
         {() => <PrivateRoute component={Dashboard} />}
       </Route>
@@ -74,6 +93,8 @@ function Router() {
     </Switch>
   );
 }
+
+/* ================= APP ================= */
 
 export default function App() {
   return (

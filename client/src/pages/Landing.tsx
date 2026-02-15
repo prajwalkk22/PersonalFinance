@@ -14,9 +14,15 @@ export default function Landing() {
             <span className="text-xl font-display font-bold">FinSmart</span>
           </div>
           <div className="flex items-center gap-4">
-            <Link href="/login">
-              <Button>Login / Sign Up</Button>
-            </Link>
+            <div className="flex gap-3">
+  <Link href="/signup">
+    <Button variant="default">Sign Up</Button>
+  </Link>
+  <Link href="/login">
+    <Button variant="outline">Login</Button>
+  </Link>
+</div>
+
           </div>
         </div>
       </nav>
@@ -44,7 +50,7 @@ export default function Landing() {
                   Track expenses, optimize taxes, and grow your wealth with the first personal finance platform powered by real-time AI insights.
                 </p>
                 <div className="flex flex-col sm:flex-row gap-4 justify-center">
-                  <Link href="/login">
+                  <Link href="/signup">
                     <Button size="lg" className="text-lg px-8 h-14 rounded-full shadow-xl shadow-primary/20 hover:shadow-2xl hover:shadow-primary/30 transition-all hover:-translate-y-1">
                       Get Started Free <ArrowRight className="ml-2 w-5 h-5" />
                     </Button>
